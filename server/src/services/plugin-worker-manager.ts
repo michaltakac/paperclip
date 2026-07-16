@@ -559,9 +559,15 @@ export function createPluginWorkerHandle(
       (message as { paperclipInvocationId?: unknown }).paperclipInvocationId,
     );
     if (!invocationId) {
-      const hasActiveInvocation = activeInvocations.size > 0 ||
-        Array.from(pendingRequests.values()).some((pending) => pending.invocationId);
-      return hasActiveInvocation ? { invalidInvocationScope: true } : {};
+      // scopeless-worker-context:
+      // Plugin jobs (e.g. honcho `initialize-memory`) are dispatched via
+      // `runJob`, which carries no invocation scope. Do NOT flag a scope-less
+      // worker→host callback as invalid merely because an unrelated company
+      // invocation is concurrently in flight — that rejects legitimate job
+      // callbacks intermittently ("unknown invocation scope"). Return an empty
+      // context; the per-method scope check permits empty scope and per-call
+      // host handlers still authorize each operation by its own params.companyId.
+      return {};
     }
     const entry = activeInvocations.get(invocationId);
     if (!entry) return { invalidInvocationScope: true };
