@@ -280,7 +280,6 @@ describe("GET /health", () => {
     expect(res.body).toEqual({
       status: "ok",
       deploymentMode: "authenticated",
-      deploymentExposure: "public",
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
       databaseBackup: {
@@ -336,7 +335,6 @@ describe("GET /health", () => {
     expect(res.body).toEqual({
       status: "ok",
       deploymentMode: "authenticated",
-      deploymentExposure: "public",
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
     });
@@ -373,7 +371,6 @@ describe("GET /health", () => {
     expect(res.body).toEqual({
       status: "ok",
       deploymentMode: "authenticated",
-      deploymentExposure: "public",
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
     });
