@@ -523,49 +523,38 @@ export function pluginRegistryService(db: Db) {
       pluginId: string,
       input: Omit<typeof pluginEntities.$inferInsert, "id" | "pluginId" | "createdAt" | "updatedAt">,
     ) => {
-      // Drizzle doesn't support pg-specific onConflictDoUpdate easily in the insert() call
-      // with complex where clauses, so we do it manually.
-      // Match the per-tenant uniqueness of `plugin_entities_external_idx`
-      // (companyId, pluginId, entityType, externalId) with NULLS NOT DISTINCT
-      // semantics: two companies (and instance-scope NULLs across each other)
-      // may share the same (pluginId, entityType, externalId) tuple, so the
-      // lookup MUST scope by companyId — `isNull` for instance-scope, `eq`
-      // otherwise — to avoid returning and overwriting another tenant's row.
-      const companyIdPredicate =
-        input.companyId == null
-          ? isNull(pluginEntities.companyId)
-          : eq(pluginEntities.companyId, input.companyId);
-      const existing = await db
-        .select()
-        .from(pluginEntities)
-        .where(
-          and(
-            companyIdPredicate,
-            eq(pluginEntities.pluginId, pluginId),
-            eq(pluginEntities.entityType, input.entityType),
-            eq(pluginEntities.externalId, input.externalId ?? ""),
-          ),
-        )
-        .then((rows) => rows[0] ?? null);
-
-      if (existing) {
-        return db
-          .update(pluginEntities)
-          .set({
-            ...input,
-            updatedAt: new Date(),
-          })
-          .where(eq(pluginEntities.id, existing.id))
-          .returning()
-          .then((rows) => rows[0]);
-      }
-
+      // Atomic upsert against the `plugin_entities_external_idx` unique index
+      // (company_id, plugin_id, entity_type, external_id) with NULLS NOT
+      // DISTINCT semantics. The previous SELECT-then-INSERT/UPDATE was
+      // non-atomic and raced whenever the same external_id was upserted
+      // concurrently (e.g. honcho's parallelized document import): both callers
+      // saw "not found" and both INSERTed, so one threw a duplicate-key error
+      // that failed the whole job. ON CONFLICT DO UPDATE turns the losing race
+      // into a harmless update. The conflict target mirrors the index columns,
+      // so tenant isolation is preserved (a different company_id — including
+      // NULL vs non-NULL — is a distinct row and inserts normally).
       return db
         .insert(pluginEntities)
         .values({
           ...input,
           pluginId,
         } as any)
+        .onConflictDoUpdate({
+          target: [
+            pluginEntities.companyId,
+            pluginEntities.pluginId,
+            pluginEntities.entityType,
+            pluginEntities.externalId,
+          ],
+          set: {
+            scopeKind: input.scopeKind,
+            scopeId: input.scopeId,
+            title: input.title,
+            status: input.status,
+            data: input.data,
+            updatedAt: new Date(),
+          },
+        })
         .returning()
         .then((rows) => rows[0]);
     },
