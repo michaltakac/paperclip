@@ -49,8 +49,17 @@ import { logger } from "../middleware/logger.js";
 /** Default interval between scheduler ticks (30 seconds). */
 const DEFAULT_TICK_INTERVAL_MS = 30_000;
 
-/** Default timeout for a runJob RPC call (5 minutes). */
-const DEFAULT_JOB_TIMEOUT_MS = 5 * 60 * 1_000;
+/**
+ * Default timeout for a runJob RPC call (15 minutes — the MAX_RPC_TIMEOUT_MS
+ * hard cap in plugin-worker-manager). Bulk plugin jobs such as honcho's
+ * `initialize-memory` import a company's full history (hundreds of comments +
+ * documents) into an external service one message at a time, which exceeds the
+ * old 5-minute bound on first run — the worker kept importing after the host
+ * gave up, so the job was marked "failed" even though the data fully landed.
+ * These jobs are idempotent (ledger dedup + atomic entity upsert), so a longer
+ * ceiling only lets the host observe the real completion.
+ */
+const DEFAULT_JOB_TIMEOUT_MS = 15 * 60 * 1_000;
 
 /** Maximum number of concurrent job executions across all plugins. */
 const DEFAULT_MAX_CONCURRENT_JOBS = 10;
