@@ -322,7 +322,6 @@ describe("GET /health", () => {
     expect(res.body).toEqual({
       status: "ok",
       deploymentMode: "authenticated",
-      deploymentExposure: "public",
       commit: testServerInfo.git.fullSha,
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
@@ -379,7 +378,6 @@ describe("GET /health", () => {
     expect(res.body).toEqual({
       status: "ok",
       deploymentMode: "authenticated",
-      deploymentExposure: "public",
       commit: testServerInfo.git.fullSha,
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
@@ -417,7 +415,6 @@ describe("GET /health", () => {
     expect(res.body).toEqual({
       status: "ok",
       deploymentMode: "authenticated",
-      deploymentExposure: "public",
       commit: testServerInfo.git.fullSha,
       bootstrapStatus: "ready",
       bootstrapInviteActive: false,
