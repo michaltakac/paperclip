@@ -92,6 +92,30 @@ const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 const TELEMETRY_EVENT_NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 
 /**
+ * Env-gated SSRF allowlist of specific private IP addresses that plugins may
+ * reach. Comma-separated exact IPs (e.g. `10.0.0.5,127.0.0.1`). Empty or unset
+ * preserves the default fail-closed policy.
+ *
+ * Self-hosted deployments run companion services (e.g. Honcho) on private
+ * addresses that plugins must reach, which the RFC1918 filter blocks outright.
+ *
+ * This allowlists *resolved IPs*, deliberately not hostnames: a hostname-based
+ * bypass would skip the private check entirely for that name, so any DNS answer
+ * — including an attacker-controlled rebind — would be honoured. Pinning exact
+ * IPs keeps the blast radius to addresses the operator named explicitly.
+ */
+function getSsrfAllowedIps(): Set<string> {
+  const raw = process.env["PAPERCLIP_SSRF_ALLOWED_IPS"];
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0),
+  );
+}
+
+/**
  * Check if an IP address is in a private/reserved range (RFC 1918, loopback,
  * link-local, etc.) that plugins should never be able to reach.
  *
@@ -188,7 +212,13 @@ async function validateAndResolveFetchUrl(urlString: string): Promise<ValidatedF
     // Filter to only non-private IPs instead of rejecting the entire request
     // when some IPs are private. This handles multi-homed hosts that resolve
     // to both private and public addresses.
-    const safeResults = results.filter((entry) => !isPrivateIP(entry.address));
+    // A private IP is permitted only if the operator named it explicitly in
+    // PAPERCLIP_SSRF_ALLOWED_IPS; otherwise the default filter applies.
+    const allowedIps = getSsrfAllowedIps();
+    const safeResults = results.filter(
+      (entry) =>
+        !isPrivateIP(entry.address) || allowedIps.has(entry.address.toLowerCase()),
+    );
     if (safeResults.length === 0) {
       throw new Error(
         `All resolved IPs for ${originalHostname} are in private/reserved ranges`,
