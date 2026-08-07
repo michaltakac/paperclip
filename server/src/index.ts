@@ -728,7 +728,15 @@ export async function startServer(): Promise<StartedServer> {
   });
   process.env.PAPERCLIP_LISTEN_HOST = runtimeListenHost;
   process.env.PAPERCLIP_LISTEN_PORT = String(listenPort);
-  process.env.PAPERCLIP_RUNTIME_API_URL = runtimeApiUrl;
+  // ordillect patch (AGE-419 / upstream paperclipai/paperclip#9492): our agents run
+  // co-located INSIDE the CT-201 paperclip-server container, which is not a tailnet
+  // node, so they cannot reach the tailnet-only public host that
+  // choosePrimaryRuntimeApiUrl derives from authPublicBaseUrl (PAPERCLIP_PUBLIC_URL).
+  // Honor the explicit PAPERCLIP_API_URL (loopback) for the runtime URL too, so agent
+  // wrapper .env files get a reachable URL. configuredApiUrl already resolves to
+  // env PAPERCLIP_API_URL when set, else the chooser result — so cloud deploys that
+  // do NOT set PAPERCLIP_API_URL are unchanged. Revert when upstream #9492 lands.
+  process.env.PAPERCLIP_RUNTIME_API_URL = configuredApiUrl;
   process.env.PAPERCLIP_RUNTIME_API_CANDIDATES_JSON = JSON.stringify(runtimeApiCandidates);
   process.env.PAPERCLIP_API_URL = configuredApiUrl;
   
