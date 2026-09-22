@@ -27,6 +27,7 @@ import {
   heartbeatRuns,
   issueThreadInteractions,
   issues,
+  plugins,
   principalPermissionGrants,
   secretAccessEvents,
   toolAccessAuditEvents,
@@ -17401,6 +17402,66 @@ describeEmbeddedPostgres("tool access service", () => {
       healthCheckedAt: new Date(0),
       lastHealthAt: new Date(0),
     });
+  });
+
+  it("health-checks a plugin backfill by plugin state instead of probing a remote endpoint", async () => {
+    const company = await createCompany(db);
+    const service = createTestToolAccessService(db);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const pluginKey = `fixture.plugin-${randomUUID()}`;
+    const [plugin] = await db.insert(plugins).values({
+      pluginKey,
+      packageName: "@fixture/plugin",
+      version: "1.0.0",
+      manifestJson: { id: pluginKey, apiVersion: 1, version: "1.0.0" } as never,
+      status: "ready",
+    }).returning();
+    const [pluginApplication] = await db.insert(toolApplications).values({
+      companyId: company.id,
+      applicationKey: `paperclip_plugin:${pluginKey}`,
+      name: "Plugin placeholder",
+      type: "paperclip_plugin",
+      status: "active",
+      metadata: { source: "plugin_backfill" },
+    }).returning();
+    // The production shape: `mcp_remote` with no URL, left in `error` by
+    // earlier sweeps that probed it as a remote MCP server.
+    const [pluginConnection] = await db.insert(toolConnections).values({
+      companyId: company.id,
+      applicationId: pluginApplication!.id,
+      name: `Plugin: ${pluginKey}`,
+      uid: `plugin-${randomUUID()}`,
+      connectionKind: "managed",
+      transport: "mcp_remote",
+      authKind: "none",
+      status: "active",
+      enabled: true,
+      config: { type: "paperclip_plugin", pluginKey },
+      transportConfig: { type: "paperclip_plugin", pluginKey },
+      healthStatus: "error",
+      healthMessage: "Remote MCP connection requires config.url",
+      lastError: "Remote MCP connection requires config.url",
+    }).returning();
+
+    await service.checkHealth(pluginConnection!.id);
+    const [healthy] = await db.select().from(toolConnections)
+      .where(eq(toolConnections.id, pluginConnection!.id));
+    expect(healthy).toMatchObject({
+      healthStatus: "ok",
+      healthMessage: "Plugin is ready; its tools run in the plugin worker.",
+      lastError: null,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await db.update(plugins).set({ status: "error" }).where(eq(plugins.id, plugin!.id));
+    await expect(service.checkHealth(pluginConnection!.id)).rejects.toThrow(
+      `Plugin ${pluginKey} is error, not ready`,
+    );
+    const [unhealthy] = await db.select().from(toolConnections)
+      .where(eq(toolConnections.id, pluginConnection!.id));
+    expect(unhealthy!.healthMessage).toBe(`Plugin ${pluginKey} is error, not ready`);
+    expect(unhealthy!.healthStatus).not.toBe("ok");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("enriches listConnections with lastUsedAt from the most recent tool-call event", async () => {

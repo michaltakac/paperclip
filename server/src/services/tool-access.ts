@@ -7538,6 +7538,26 @@ export function toolAccessService(
     return updated;
   }
 
+  // Legacy plugin backfills keep `mcp_remote` as a placeholder transport, but
+  // their tools run in the plugin worker and there is no endpoint to probe.
+  // The sweep already skips them; a manual check must not probe either, or it
+  // fails with "requires config.url" and the setup page asks for a new key the
+  // connection never had. Report the plugin's own state instead.
+  async function assertPluginBackfillReady(config: Record<string, unknown>) {
+    const pluginKey = typeof config.pluginKey === "string" ? config.pluginKey : null;
+    if (!pluginKey) return;
+    const [row] = await db
+      .select({ status: plugins.status })
+      .from(plugins)
+      .where(eq(plugins.pluginKey, pluginKey));
+    if (!row) {
+      throw unprocessable(`Plugin ${pluginKey} is not installed`, { code: "plugin_not_installed" });
+    }
+    if (row.status !== "ready") {
+      throw unprocessable(`Plugin ${pluginKey} is ${row.status}, not ready`, { code: "plugin_not_ready" });
+    }
+  }
+
   async function checkConnectionHealth(
     connectionId: string,
     actor?: ActorInfo,
@@ -7548,7 +7568,10 @@ export function toolAccessService(
     try {
       const config = asRecord(connection.config);
       const oauth = asRecord(config.oauth);
-      if (
+      const isPluginBackfill = config.type === "paperclip_plugin";
+      if (isPluginBackfill) {
+        await assertPluginBackfillReady(config);
+      } else if (
         config.sourceTemplateKey === "github" &&
         oauth.connectorProfile === "github.code"
       ) {
@@ -7616,7 +7639,9 @@ export function toolAccessService(
       const updated = await updateConnectionHealth(
         connection,
         "ok",
-        config.sourceTemplateKey === "github" &&
+        isPluginBackfill
+          ? "Plugin is ready; its tools run in the plugin worker."
+          : config.sourceTemplateKey === "github" &&
           oauth.connectorProfile === "github.code"
           ? "GitHub account, installation, and repository access are available."
           : isAgentMailConnection(connection)
