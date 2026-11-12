@@ -14,6 +14,7 @@ import { CONVERSATION_CONTINUATION_POLICY, claimedAdapterType, runUsedConversati
 import { recordExecutionWait } from "./execution-wait.js";
 import {
   legacyExecutionNeedsReconciliation,
+  legacyRunNeverReachedAdapter,
   terminalizeLegacyExecution,
 } from "./legacy-execution-recovery.js";
 import {
@@ -12622,12 +12623,16 @@ export function heartbeatService(
 
     // Cancelling a queued run that never acquired provider execution is
     // positive bootstrap evidence. It must not hold unrelated queued messages.
+    // The same holds for a claimed run that was stopped during Paperclip-side
+    // setup, before "run started" and adapter.invoke were recorded.
     if (
       status === "cancelled" &&
-      previousStatus?.status === "queued" &&
+      previousStatus &&
       previousStatus.runtimeMode !== "native" &&
-      !previousStatus.startedAt &&
-      !previousStatus.processPid
+      !previousStatus.processPid &&
+      ((previousStatus.status === "queued" && !previousStatus.startedAt) ||
+        (previousStatus.status === "running" &&
+          (await legacyRunNeverReachedAdapter(db, previousStatus))))
     ) {
       patch = {
         ...patch,
@@ -12706,12 +12711,16 @@ export function heartbeatService(
 
     // Cancelling a queued run that never acquired provider execution is
     // positive bootstrap evidence. It must not hold unrelated queued messages.
+    // The same holds for a claimed run that was stopped during Paperclip-side
+    // setup, before "run started" and adapter.invoke were recorded.
     if (
       status === "cancelled" &&
-      previousStatus?.status === "queued" &&
+      previousStatus &&
       previousStatus.runtimeMode !== "native" &&
-      !previousStatus.startedAt &&
-      !previousStatus.processPid
+      !previousStatus.processPid &&
+      ((previousStatus.status === "queued" && !previousStatus.startedAt) ||
+        (previousStatus.status === "running" &&
+          (await legacyRunNeverReachedAdapter(db, previousStatus))))
     ) {
       patch = {
         ...patch,

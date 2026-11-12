@@ -640,6 +640,35 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(source.resultJson).toBeNull();
   });
 
+  it.each(["stopped_in_setup", "run_started", "adapter_invoked", "no_events", "has_output"])("continues a local legacy run only when it was stopped before the adapter was reached: %s", async evidence => {
+    const f = await seed();
+    await db.update(agents).set({ adapterType: "hermes_local" }).where(eq(agents.id, f.agentId));
+    await db.delete(nativeRunFinalizations).where(eq(nativeRunFinalizations.runId, f.sourceRunId));
+    await db.update(heartbeatRuns).set({ runtimeMode: "legacy", nativeIssueId: null, status: "cancelled", errorCode: "cancelled",
+      processPid: null, processGroupId: null, startedAt: new Date("2026-09-11T09:59:00Z"),
+      lastOutputAt: evidence === "has_output" ? new Date("2026-09-11T09:59:30Z") : null,
+    }).where(eq(heartbeatRuns.id, f.sourceRunId));
+    await db.update(issueRecoveryActions).set({ cause: "legacy_execution_requires_reconciliation" })
+      .where(eq(issueRecoveryActions.sourceIssueId, f.issueId));
+    const event = (seq: number, eventType: string, message: string) => db.insert(heartbeatRunEvents).values({
+      companyId: f.companyId, runId: f.sourceRunId, agentId: f.agentId, seq, eventType, stream: "system", message });
+    // What an operator Stop during Paperclip-side setup leaves behind (MHA PAP-1012).
+    if (evidence !== "no_events") await event(1, "lifecycle", "run cancelled");
+    if (evidence === "run_started") await event(2, "lifecycle", "run started");
+    if (evidence === "adapter_invoked") await event(2, "adapter.invoke", "adapter invocation");
+    let refusal: string | null = null;
+    const result = await db.transaction(tx => admitExplicitNativeContinuation({ ...f, db: tx as unknown as typeof db,
+      onBlocked: reason => { refusal = reason; } }));
+    if (evidence === "stopped_in_setup") {
+      expect(result).toMatchObject({ previousRunId: f.sourceRunId });
+      expect(await getExecutionBlocker(db, f.companyId, f.issueId)).toBeNull();
+    } else {
+      expect(result).toBeNull();
+      expect(refusal).toBe("process_identity_missing");
+      expect(await getExecutionBlocker(db, f.companyId, f.issueId)).not.toBeNull();
+    }
+  });
+
   it.each(["claim", "invocation"])("does not convert a known process run after switching the agent to Claude: %s", async evidence => {
     const f = await seed();
     await db.update(agents).set({ adapterType: "claude_local" }).where(eq(agents.id, f.agentId));

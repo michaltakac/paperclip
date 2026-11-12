@@ -1,8 +1,8 @@
 import { normalizeMaxTurnStopReason } from "./heartbeat-stop-metadata.js";
 import { hasConversationContinuationPolicy } from "./conversation-continuation.js";
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { heartbeatRuns, issueRecoveryActions, issues, type Db } from "@paperclipai/db";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
+import { heartbeatRunEvents, heartbeatRuns, issueRecoveryActions, issues, type Db } from "@paperclipai/db";
 import { issueRecoveryActionService } from "./issue-recovery-actions.js";
 import { parseIssueExecutionState } from "./issue-execution-policy.js";
 import { executionFailureRetryCount } from "./execution-recovery-attempt.js";
@@ -46,6 +46,42 @@ export function legacyExecutionNeedsReconciliation(
   return !(
     evidence?.kind === "bootstrap" && evidence.providerWorkStarted === false
   );
+}
+
+/**
+ * Positive evidence that a legacy run ended before Paperclip reached its adapter.
+ *
+ * A claimed run spends its first seconds on Paperclip-side setup (workspace,
+ * session, instructions). Only then does it record "run started" and
+ * `adapter.invoke`, and only after that can a provider process exist or an
+ * action happen. A run stopped during setup has none of these marks: no process
+ * identity, no output, no launch event. Such a run has no action outcomes to
+ * reconcile, so it must not hold the task (MHA PAP-1012: an operator Stop one
+ * minute after the claim froze the task for five days, because "no process
+ * identity" could never be turned into a stop receipt).
+ *
+ * `requireRecordedEvents` is for runs judged long after the fact: a row with no
+ * events at all may predate run events, and proves nothing.
+ */
+export async function legacyRunNeverReachedAdapter(
+  db: Db,
+  run: Pick<Run, "id" | "companyId" | "runtimeMode" | "processPid" | "processGroupId" | "processStartedAt" | "lastOutputAt" | "logBytes" | "sessionIdAfter">,
+  options: { requireRecordedEvents?: boolean } = {},
+): Promise<boolean> {
+  if (run.runtimeMode === "native") return false;
+  if (run.processPid || run.processGroupId || run.processStartedAt || run.lastOutputAt ||
+      (run.logBytes ?? 0) > 0 || run.sessionIdAfter) return false;
+  const [launched] = await db.select({ id: heartbeatRunEvents.id }).from(heartbeatRunEvents).where(and(
+    eq(heartbeatRunEvents.companyId, run.companyId), eq(heartbeatRunEvents.runId, run.id),
+    or(eq(heartbeatRunEvents.eventType, "adapter.invoke"),
+      and(eq(heartbeatRunEvents.eventType, "lifecycle"), eq(heartbeatRunEvents.message, "run started"))),
+  )).limit(1);
+  if (launched) return false;
+  if (!options.requireRecordedEvents) return true;
+  const [any] = await db.select({ id: heartbeatRunEvents.id }).from(heartbeatRunEvents).where(and(
+    eq(heartbeatRunEvents.companyId, run.companyId), eq(heartbeatRunEvents.runId, run.id),
+  )).limit(1);
+  return Boolean(any);
 }
 
 /** Persist the failed legacy run, owned lock release and operator decision together. */
