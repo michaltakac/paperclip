@@ -1752,13 +1752,21 @@ function readNonEmptyString(value: unknown): string | null {
  * deterministic programming or data error. Class `08` (connection exception)
  * covers every connection-level drop (`08000`, `08001`, `08003`, `08004`,
  * `08006`, `08007`, ...), so match the whole class by prefix; the remaining
- * codes are the serialization / deadlock / lock / cancellation family.
+ * codes are the serialization / deadlock / lock / cancellation family plus the
+ * class `57` operator-intervention shutdowns a serverless Postgres (Neon) raises
+ * when it suspends a compute or is still cold-starting. `57P01` in particular is
+ * the leading AGE-810 root-cause hypothesis (admin shutdown on a Neon connection
+ * drop); none of the `57Pxx` shutdown codes is ever a deterministic app bug, so
+ * retrying them cannot mask a real defect.
  */
 const TRANSIENT_DB_SQLSTATES = new Set<string>([
   "40001", // serialization_failure
   "40P01", // deadlock_detected
   "55P03", // lock_not_available
   "57014", // query_canceled
+  "57P01", // admin_shutdown (e.g. Neon compute suspend / admin-initiated drop)
+  "57P02", // crash_shutdown (backend terminated; reconnect is appropriate)
+  "57P03", // cannot_connect_now (server starting up / not yet accepting connections)
 ]);
 
 export function isTransientDbSqlState(code: string | null | undefined): boolean {
@@ -10514,7 +10522,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       },
     };
 
-    let seq = 1;
+    // Start after any lifecycle events already written to this run row before
+    // execution began. A scheduled-retry "promoted" event (promoteDueScheduledRetries)
+    // or an orphaned-child "queued automatic retry" event is written to this same
+    // run at seq=1 *before* executeRun picks it up. Hardcoding `1` here re-used that
+    // taken seq, so the first `run started` write collided on the
+    // heartbeat_run_events_run_seq_uq (run_id, seq) unique index and hard-failed the
+    // whole run before the adapter dispatched. Allocate from the current max like
+    // every other appendRunEvent call site. See AGE-810 RCA.
+    let seq = await nextRunEventSeq(run.id);
     let handle: RunLogHandle | null = null;
     let stdoutExcerpt = "";
     let stderrExcerpt = "";

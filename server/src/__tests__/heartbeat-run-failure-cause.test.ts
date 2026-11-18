@@ -86,8 +86,21 @@ describe("unwrapDbErrorCause", () => {
 });
 
 describe("isTransientDbSqlState / isTransientDbFailure", () => {
-  it("treats the connection (08) class and serialization/deadlock/lock/cancel codes as transient", () => {
-    for (const code of ["08000", "08003", "08006", "40001", "40P01", "55P03", "57014"]) {
+  it("treats the connection (08) class, serialization/deadlock/lock/cancel codes, and the 57Pxx operator-intervention shutdowns as transient", () => {
+    for (const code of [
+      "08000",
+      "08003",
+      "08006",
+      "40001",
+      "40P01",
+      "55P03",
+      "57014",
+      // 57Pxx shutdowns Neon raises on compute suspend / cold-start; 57P01 is the
+      // explicitly-named AGE-810 root-cause hypothesis (admin shutdown).
+      "57P01",
+      "57P02",
+      "57P03",
+    ]) {
       expect(isTransientDbSqlState(code)).toBe(true);
       expect(isTransientDbFailure(makeDrizzleQueryError({ code }))).toBe(true);
     }
